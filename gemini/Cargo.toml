@@ -11,7 +11,7 @@ readme = "README.md"
 license = "MIT"
 
 [dependencies]
-reqwest = { version = "0.12", features = ["json", "stream","rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream","rustls-tls"] }
 bytes = "1"
 base64 = "0.22.1"
 derive-new = "0.7.0"
