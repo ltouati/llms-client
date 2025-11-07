@@ -2,7 +2,7 @@ use super::types::request::*;
 use crate::utils::{self, MatchedFiles};
 use getset::Getters;
 use regex::Regex;
-use reqwest::header::HeaderMap;
+use wreq::header::HeaderMap;
 use std::time::Duration;
 
 const REQ_TIMEOUT: Duration = Duration::from_secs(10);

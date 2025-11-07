@@ -2,7 +2,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use derive_new::new;
 use getset::Getters;
 use mime::Mime;
-use reqwest::header::{HeaderMap, ToStrError};
+use wreq::header::{HeaderMap, ToStrError};
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -23,7 +23,7 @@ pub struct InlineData {
 }
 #[derive(Debug)]
 pub enum InlineDataError {
-    RequestFailed(reqwest::Error),
+    RequestFailed(wreq::Error),
     CheckerFalse,
     ContentTypeMissing,
     ContentTypeParseFailed(ToStrError),
@@ -33,7 +33,7 @@ impl InlineData {
         url: &str,
         checker: F,
     ) -> Result<Self, InlineDataError> {
-        let response = reqwest::get(url)
+        let response = wreq::get(url).send()
             .await
             .map_err(|e| InlineDataError::RequestFailed(e))?;
         if !checker(response.headers()) {

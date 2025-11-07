@@ -2,15 +2,16 @@ use super::error::GeminiResponseError;
 use super::types::request::*;
 use super::types::response::*;
 use super::types::sessions::Session;
-use reqwest::Client;
+use wreq::Client;
 use serde_json::{Value, json};
 use std::time::Duration;
+use debug_ignore::DebugIgnore;
 
 const BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 
 #[derive(Clone, Default, Debug)]
 pub struct Gemini {
-    client: Client,
+    client: DebugIgnore<Client>,
     api_key: String,
     model: String,
     sys_prompt: Option<SystemInstruction>,
@@ -32,7 +33,7 @@ impl Gemini {
             client: Client::builder()
                 .timeout(Duration::from_secs(60))
                 .build()
-                .unwrap(),
+                .unwrap().into(),
             api_key: api_key.into(),
             model: model.into(),
             sys_prompt,
@@ -49,7 +50,7 @@ impl Gemini {
         api_timeout: Duration,
     ) -> Self {
         Self {
-            client: Client::builder().timeout(api_timeout).build().unwrap(),
+            client: Client::builder().timeout(api_timeout).build().unwrap().into(),
             api_key: api_key.into(),
             model: model.into(),
             sys_prompt,
@@ -134,19 +135,19 @@ impl Gemini {
             ))
             .send()
             .await
-            .map_err(|e| GeminiResponseError::ReqwestError(e))?;
+            .map_err(|e| GeminiResponseError::wreqError(e))?;
 
         if !response.status().is_success() {
             let text = response
                 .text()
                 .await
-                .map_err(|e| GeminiResponseError::ReqwestError(e))?;
+                .map_err(|e| GeminiResponseError::wreqError(e))?;
             return Err(GeminiResponseError::StatusNotOk(text));
         }
 
         let reply = GeminiResponse::new(response)
             .await
-            .map_err(|e| GeminiResponseError::ReqwestError(e))?;
+            .map_err(|e| GeminiResponseError::wreqError(e))?;
         session.update(&reply);
         Ok(reply)
     }
@@ -193,13 +194,13 @@ impl Gemini {
             .await;
         let response = match request {
             Ok(response) => response,
-            Err(e) => return Err((session, GeminiResponseError::ReqwestError(e))),
+            Err(e) => return Err((session, GeminiResponseError::wreqError(e))),
         };
 
         if !response.status().is_success() {
             let text = match response.text().await {
                 Ok(response) => response,
-                Err(e) => return Err((session, GeminiResponseError::ReqwestError(e))),
+                Err(e) => return Err((session, GeminiResponseError::wreqError(e))),
             };
             return Err((session, GeminiResponseError::StatusNotOk(text.into())));
         }

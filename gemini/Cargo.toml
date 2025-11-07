@@ -11,7 +11,7 @@ readme = "README.md"
 license = "MIT"
 
 [dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream","rustls-tls"] }
+wreq = {version = "6.0.0-rc.21",features = ["json", "stream"],default-features = false}
 bytes = "1"
 base64 = "0.22.1"
 derive-new = "0.7.0"
@@ -21,5 +21,6 @@ pin-project-lite = "0.2.16"
 regex = "1.11.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.140"
-tokio = { version = "1", features = ["fs", "macros"] }
+tokio = { version = "1", features = ["fs", "macros"],default-features = false }
 mime = "0.3.17"
+debug-ignore="1.0.5"

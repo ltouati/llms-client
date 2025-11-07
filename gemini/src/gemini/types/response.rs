@@ -4,7 +4,7 @@ use crate::gemini::error::GeminiResponseStreamError;
 use bytes::Bytes;
 use derive_new::new;
 use futures::Stream;
-use reqwest::Response;
+use wreq::Response;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -57,7 +57,7 @@ pub struct GeminiResponse {
     pub promptFeedback: Option<Value>,
 }
 impl GeminiResponse {
-    pub(crate) async fn new(response: Response) -> Result<GeminiResponse, reqwest::Error> {
+    pub(crate) async fn new(response: Response) -> Result<GeminiResponse, wreq::Error> {
         response.json().await
     }
     pub(crate) fn from_str(string: impl AsRef<str>) -> Result<Self, serde_json::Error> {
@@ -147,7 +147,7 @@ pin_project_lite::pin_project! {
     pub struct ResponseStream<F,T>
         where F:FnMut(&Session, GeminiResponse) -> T{
         #[pin]
-        response_stream:Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Unpin + Send + 'static>,
+        response_stream:Box<dyn Stream<Item = Result<Bytes, wreq::Error>> + Unpin + Send + 'static>,
         session: Session,
         data_extractor: F,
         buffer: Vec<u8>,
@@ -225,7 +225,7 @@ where
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
-                    return Poll::Ready(Some(Err(GeminiResponseStreamError::ReqwestError(e))));
+                    return Poll::Ready(Some(Err(GeminiResponseStreamError::wreqError(e))));
                 }
             }
         }
@@ -237,7 +237,7 @@ where
 {
     pub(crate) fn new(
         response_stream: Box<
-            dyn Stream<Item = Result<Bytes, reqwest::Error>> + Unpin + Send + 'static,
+            dyn Stream<Item = Result<Bytes, wreq::Error>> + Unpin + Send + 'static,
         >,
         session: Session,
         data_extractor: F,

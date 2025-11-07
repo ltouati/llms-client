@@ -2,8 +2,8 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use futures::future::join_all;
 pub use mime;
 use regex::Regex;
-use reqwest::Client;
-pub use reqwest::header::{HeaderMap, HeaderValue};
+use wreq::Client;
+pub use wreq::header::{HeaderMap, HeaderValue};
 use std::time::Duration;
 
 #[derive(Clone)]
