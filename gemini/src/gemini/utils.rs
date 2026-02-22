@@ -4,6 +4,11 @@ use getset::Getters;
 use regex::Regex;
 use wreq::header::HeaderMap;
 use std::time::Duration;
+mod macros;
+pub use gemini_proc_macros::{
+    execute_function_calls, execute_function_calls_with_callback, gemini_function, gemini_schema,
+};
+pub use macros::GeminiSchema;
 
 const REQ_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -45,7 +50,7 @@ impl MarkdownToPartsBuilder {
                 self.regex
                     .unwrap_or(Regex::new(r"(?s)!\[.*?].?\((.*?)\)").unwrap()),
                 self.guess_mime_type.unwrap_or(|_| mime::IMAGE_PNG),
-                |_| true,
+                self.decide_download.unwrap_or(|_| true),
                 self.timeout.unwrap_or(REQ_TIMEOUT),
             )
             .await,
@@ -99,7 +104,8 @@ impl<'a> MarkdownToParts<'a> {
         }
     }
     ///# Panics
-    /// `regex` must have a Regex with only 1 capture group with file URL as first capture group, else it PANICS.
+    ///`regex` must have a Regex with only 1 capture group with file URL as first capture
+    ///group, else it PANICS.
     /// # Arguments
     /// `guess_mime_type` is used to detect mimi_type of URL pointing to file system or web resource
     /// with no "Content-Type" header.
@@ -155,15 +161,15 @@ impl<'a> MarkdownToParts<'a> {
             {
                 let end = index + length - removed_length;
                 let text = &self.markdown[..end];
-                parts.push(Part::text(text.into()));
-                parts.push(Part::inline_data(InlineData::new(mime_type, base64)));
+                parts.push(text.into());
+                parts.push(InlineData::new(mime_type, base64).into());
 
                 self.markdown = &self.markdown[end..];
                 removed_length += end;
             }
         }
         if self.markdown.len() != 0 {
-            parts.push(Part::text(self.markdown.into()));
+            parts.push(self.markdown.into());
         }
         parts
     }

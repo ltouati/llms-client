@@ -1,14 +1,17 @@
 [package]
 name = "gemini-client-api"
-version = "5.5.8"
+version = "7.3.2"
 edition = "2024"
 repository = "https://github.com/Suryansh-Dey/llms-client"
-authors = ["Suryansh Dey suryanshdey@gmail.com"]
+authors = ["Suryansh Dey <suryanshdey@gmail.com>"]
 keywords = ["Gemini", "SDK", "client", "API", "AI"]
 categories = ["web-programming", "asynchronous"]
-description = "Library to use Google Gemini API's all tools(code, search, function calling) even with streaming. Automatic context management!"
+description = "Library to use Google Gemini API. Automatic context management, schema generation, function calling and more."
 readme = "README.md"
 license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 wreq = {version = "6.0.0-rc.21",features = ["json", "stream"],default-features = false}
@@ -21,6 +24,9 @@ pin-project-lite = "0.2.16"
 regex = "1.11.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.140"
-tokio = { version = "1", features = ["fs", "macros"],default-features = false }
+tokio = { version = "1", default-features = false, features = ["fs", "macros", "rt-multi-thread"] }
 mime = "0.3.17"
 debug-ignore="1.0.5"
+gemini-proc-macros = { version = "1.0.2", path = "./gemini-proc-macros" }
+thiserror = "2.0.18"
+

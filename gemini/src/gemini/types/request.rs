@@ -1,34 +1,57 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
+use core::fmt;
 use derive_new::new;
 use getset::Getters;
-use mime::Mime;
+use mime::{FromStrError, Mime};
 use wreq::header::{HeaderMap, ToStrError};
-use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::str::FromStr;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[allow(non_camel_case_types)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub enum Role {
-    user,
-    model,
+    User,
+    Model,
+    Function,
 }
 
-#[derive(Serialize, Deserialize, Clone, new, Getters, Debug)]
+#[derive(Serialize, Deserialize, Clone, Getters, Debug)]
 pub struct InlineData {
     #[get = "pub"]
     mime_type: String,
     #[get = "pub"]
+    ///Base64 encoded string.
     data: String,
 }
-#[derive(Debug)]
+
+#[derive(thiserror::Error, Debug)]
 pub enum InlineDataError {
+    #[error(transparent)]
     RequestFailed(wreq::Error),
+    #[error("Checker function returned false")]
+    ///Checker function returned false
     CheckerFalse,
+    #[error("Content-Type was missing in response headers")]
+    ///Content-Type was missing in response headers
     ContentTypeMissing,
+    #[error(transparent)]
     ContentTypeParseFailed(ToStrError),
+    #[error("Failed to parse mime type: {0}")]
+    ///Failed to parse mime type
+    InvalidMimeType(FromStrError),
 }
+
 impl InlineData {
+    /// Creates a new InlineData.
+    /// `data` must be a base64 encoded string.
+    pub fn new(mime_type: Mime, data: String) -> Self {
+        Self {
+            mime_type: mime_type.to_string(),
+            data,
+        }
+    }
+
     pub async fn from_url_with_check<F: FnOnce(&HeaderMap) -> bool>(
         url: &str,
         checker: F,
@@ -39,17 +62,21 @@ impl InlineData {
         if !checker(response.headers()) {
             return Err(InlineDataError::CheckerFalse);
         }
+
         let mime_type = response
             .headers()
             .get("Content-Type")
             .ok_or(InlineDataError::ContentTypeMissing)?
             .to_str()
-            .map_err(|e| InlineDataError::ContentTypeParseFailed(e))?
-            .to_string();
+            .map_err(|e| InlineDataError::ContentTypeParseFailed(e))?;
+        let mime_type =
+            Mime::from_str(mime_type).map_err(|e| InlineDataError::InvalidMimeType(e))?;
+
         let body = response
             .bytes()
             .await
             .map_err(|e| InlineDataError::RequestFailed(e))?;
+
         Ok(InlineData::new(mime_type, STANDARD.encode(body)))
     }
     pub async fn from_url(url: &str) -> Result<Self, InlineDataError> {
@@ -57,20 +84,17 @@ impl InlineData {
     }
     pub async fn from_path(file_path: &str, mime_type: Mime) -> Result<Self, std::io::Error> {
         let data = tokio::fs::read(file_path).await?;
-        Ok(InlineData::new(
-            mime_type.to_string(),
-            STANDARD.encode(data),
-        ))
+        Ok(InlineData::new(mime_type, STANDARD.encode(data)))
     }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[allow(non_camel_case_types)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Language {
     ///Unspecified language. This value should not be used.
-    LANGUAGE_UNSPECIFIED,
+    LanguageUnspecified,
     ///Python >= 3.10, with numpy and simpy available.
-    PYTHON,
+    Python,
 }
 
 #[derive(Serialize, Deserialize, Clone, new, Getters, Debug)]
@@ -83,46 +107,47 @@ pub struct ExecutableCode {
 
 #[derive(Serialize, Deserialize, Clone, new, Getters, Debug)]
 pub struct FunctionCall {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<String>,
+    #[get = "pub"]
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[get = "pub"]
     args: Option<Value>,
 }
 
 #[derive(Serialize, Deserialize, Clone, new, Getters, Debug)]
 pub struct FunctionResponse {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<String>,
+    #[get = "pub"]
     name: String,
+    #[get = "pub"]
     response: Value,
 }
 
 #[derive(Serialize, Deserialize, Clone, new, Getters, Debug)]
-#[allow(non_snake_case)]
 pub struct FileData {
     #[serde(skip_serializing_if = "Option::is_none", alias = "mimeType")]
+    #[get = "pub"]
     mime_type: Option<String>,
     #[serde(alias = "fileUri")]
+    #[get = "pub"]
     file_uri: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[allow(non_camel_case_types)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Outcome {
     /// Unspecified status. This value should not be used.
-    OUTCOME_UNSPECIFIED,
+    OutcomeUnspecified,
     /// Code execution completed successfully.
-    OUTCOME_OK,
+    OutcomeOk,
     /// Code execution finished but with a failure. `stderr` should contain the reason.
-    OUTCOME_FAILED,
+    OutcomeFailed,
     /// Code execution ran for too long, and was cancelled.
     /// There may or may not be a partial output present.
-    OUTCOME_DEADLINE_EXCEEDED,
+    OutcomeDeadlineExceeded,
 }
 
 #[derive(Serialize, Deserialize, Clone, new, Getters, Debug)]
-pub struct CodeExecuteResult {
+pub struct CodeExecutionResult {
     #[get = "pub"]
     outcome: Outcome,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -130,129 +155,105 @@ pub struct CodeExecuteResult {
     output: Option<String>,
 }
 
-#[derive(Serialize, Clone, new, Getters, Debug)]
-pub struct TextPart {
-    #[get = "pub"]
-    text: String,
-    #[get = "pub"]
-    thought: bool,
-}
-impl From<String> for TextPart {
-    /// Creates a TextPart from a String, where `thought` is always `false`.
-    fn from(text: String) -> Self {
-        TextPart::new(text, false)
-    }
-}
-impl<'a> From<&'a str> for TextPart {
-    /// Creates a TextPart from &str, where `thought` is always `false`.
-    fn from(text: &'a str) -> Self {
-        TextPart::new(text.to_string(), false)
-    }
-}
-
-#[derive(Clone, Debug)]
-#[allow(non_camel_case_types)]
-pub enum Part {
-    text(TextPart),
-    ///Image or document
-    inline_data(InlineData),
-    executable_code(ExecutableCode),
-    code_execution_result(CodeExecuteResult),
-    functionCall(FunctionCall),
-    functionResponse(FunctionResponse),
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum PartType {
+    Text(String),
+    ///Image or document like PDF
+    InlineData(InlineData),
+    ExecutableCode(ExecutableCode),
+    CodeExecutionResult(CodeExecutionResult),
+    FunctionCall(FunctionCall),
+    FunctionResponse(FunctionResponse),
     ///For Audio file URL. Not allowed for images or PDFs, use InlineData instead.
-    file_data(FileData),
+    FileData(FileData),
 }
-
-impl serde::Serialize for Part {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            Part::text(text_part) => {
-                if *text_part.thought() {
-                    // If it's a "thought", serialize as an object with two fields
-                    let mut map = serializer.serialize_map(Some(2))?;
-                    map.serialize_entry("text", text_part.text())?;
-                    map.serialize_entry("thought", text_part.thought())?;
-                    map.end()
-                } else {
-                    // If it's a regular text, we use a special serde method
-                    // that will create exactly {"text": "..."}
-                    serializer.serialize_newtype_variant("Part", 0, "text", text_part.text())
-                }
-            }
-
-            // Standard handling for all other variants
-            Part::inline_data(data) => {
-                serializer.serialize_newtype_variant("Part", 1, "inlineData", data)
-            }
-            Part::executable_code(code) => {
-                serializer.serialize_newtype_variant("Part", 2, "executableCode", code)
-            }
-            Part::code_execution_result(result) => {
-                serializer.serialize_newtype_variant("Part", 3, "codeExecutionResult", result)
-            }
-            Part::functionCall(call) => {
-                serializer.serialize_newtype_variant("Part", 4, "functionCall", call)
-            }
-            Part::functionResponse(response) => {
-                serializer.serialize_newtype_variant("Part", 5, "functionResponse", response)
-            }
-            Part::file_data(data) => {
-                serializer.serialize_newtype_variant("Part", 6, "fileData", data)
-            }
-        }
+#[derive(Serialize, Deserialize, Clone, Getters)]
+#[serde(rename_all = "camelCase")]
+pub struct Part {
+    #[get = "pub"]
+    #[serde(flatten)]
+    data: PartType,
+    #[get = "pub"]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thought: Option<bool>,
+    #[get = "pub"]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thought_signature: Option<String>,
+}
+impl fmt::Debug for Part {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Part")
+            .field("data", &self.data)
+            .field("thought", &self.thought)
+            .field(
+                "thought_signature",
+                &self
+                    .thought_signature
+                    .as_ref()
+                    .map(|s| format!("{}..truncated", &s[..3])),
+            )
+            .finish()
     }
 }
-
-impl<'de> serde::Deserialize<'de> for Part {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(serde::Deserialize)] // small hack
-        struct PartHelper {
-            text: Option<String>,
-            #[serde(default)]
-            thought: bool,
-            #[serde(alias = "inlineData")]
-            inline_data: Option<InlineData>,
-            #[serde(alias = "executableCode")]
-            executable_code: Option<ExecutableCode>,
-            #[serde(alias = "codeExecutionResult")]
-            code_execution_result: Option<CodeExecuteResult>,
-            #[serde(alias = "functionCall")]
-            function_call: Option<FunctionCall>,
-            #[serde(alias = "functionResponse")]
-            function_response: Option<FunctionResponse>,
-            #[serde(alias = "fileData")]
-            file_data: Option<FileData>,
+impl Part {
+    pub fn is_thought(&self) -> bool {
+        self.thought == Some(true)
+    }
+    pub fn new(data: PartType) -> Self {
+        Self {
+            data,
+            thought: None,
+            thought_signature: None,
         }
-
-        let helper = PartHelper::deserialize(deserializer)?;
-
-        // We check the variants in order of their uniqueness
-        if let Some(data) = helper.inline_data {
-            Ok(Part::inline_data(data))
-        } else if let Some(code) = helper.executable_code {
-            Ok(Part::executable_code(code))
-        } else if let Some(result) = helper.code_execution_result {
-            Ok(Part::code_execution_result(result))
-        } else if let Some(call) = helper.function_call {
-            Ok(Part::functionCall(call))
-        } else if let Some(resp) = helper.function_response {
-            Ok(Part::functionResponse(resp))
-        } else if let Some(data) = helper.file_data {
-            Ok(Part::file_data(data))
-        } else if let Some(text) = helper.text {
-            // Special case: create a TextPart with the text and the `thought` flag
-            let text_part = TextPart::new(text, helper.thought);
-            Ok(Part::text(text_part))
-        } else {
-            Err(serde::de::Error::custom("Unknown Part variant in JSON"))
-        }
+    }
+    pub fn data_mut(&mut self) -> &mut PartType {
+        &mut self.data
+    }
+}
+impl From<PartType> for Part {
+    fn from(value: PartType) -> Self {
+        Self::new(value)
+    }
+}
+impl From<String> for Part {
+    fn from(value: String) -> Self {
+        Self::new(PartType::Text(value))
+    }
+}
+impl From<&str> for Part {
+    fn from(value: &str) -> Self {
+        Self::new(PartType::Text(value.into()))
+    }
+}
+impl From<InlineData> for Part {
+    fn from(value: InlineData) -> Self {
+        Self::new(PartType::InlineData(value))
+    }
+}
+impl From<ExecutableCode> for Part {
+    fn from(value: ExecutableCode) -> Self {
+        Self::new(PartType::ExecutableCode(value))
+    }
+}
+impl From<CodeExecutionResult> for Part {
+    fn from(value: CodeExecutionResult) -> Self {
+        Self::new(PartType::CodeExecutionResult(value))
+    }
+}
+impl From<FunctionCall> for Part {
+    fn from(value: FunctionCall) -> Self {
+        Self::new(PartType::FunctionCall(value))
+    }
+}
+impl From<FunctionResponse> for Part {
+    fn from(value: FunctionResponse) -> Self {
+        Self::new(PartType::FunctionResponse(value))
+    }
+}
+impl From<FileData> for Part {
+    fn from(value: FileData) -> Self {
+        Self::new(PartType::FileData(value))
     }
 }
 
@@ -267,50 +268,163 @@ impl Chat {
     pub(super) fn parts_mut(&mut self) -> &mut Vec<Part> {
         &mut self.parts
     }
+    ///`seperator` used to concatenate all text parts. TL;DR use "\n" as seperator.
+    ///Don't contain thoughts
+    pub fn get_text_no_think(&self, seperator: impl AsRef<str>) -> String {
+        let parts = self.parts();
+        let final_text = parts
+            .iter()
+            .filter_map(|part| {
+                if let PartType::Text(text) = part.data() {
+                    if !part.is_thought() {
+                        Some(text.as_str())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<&str>>()
+            .join(seperator.as_ref());
+
+        final_text
+    }
+    ///`seperator` used to concatenate all text parts. TL;DR use "\n" as seperator.
+    pub fn get_thoughts(&self, seperator: impl AsRef<str>) -> String {
+        let parts = self.parts();
+        let thoughts = parts
+            .iter()
+            .filter_map(|part| {
+                if let PartType::Text(text) = part.data() {
+                    if part.is_thought() {
+                        Some(text.as_str())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<&str>>()
+            .join(seperator.as_ref());
+
+        thoughts
+    }
+    pub fn extract_text_all(parts: &[Part], seperator: impl AsRef<str>) -> String {
+        parts
+            .iter()
+            .filter_map(|part| {
+                if let PartType::Text(text_part) = part.data() {
+                    // Just return the text, without checking the `thought` flag
+                    Some(text_part.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<&str>>()
+            .join(seperator.as_ref())
+    }
+    ///`seperator` used to concatenate all text parts. TL;DR use "" as seperator.
+    ///Includes all text including thoughts
+    pub fn get_text_all(&self, seperator: impl AsRef<str>) -> String {
+        Self::extract_text_all(&self.parts(), seperator)
+    }
+    pub fn is_thinking(&self) -> bool {
+        self.parts.iter().any(|p| p.is_thought())
+    }
+    pub fn has_function_call(&self) -> bool {
+        self.parts
+            .iter()
+            .any(|p| matches!(p.data(), PartType::FunctionCall(_)))
+    }
 }
 
-#[derive(Serialize, Deserialize, Clone, Getters, Debug, Default)]
-#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ThinkingLevel {
+    ///Default value.
+    #[default]
+    ThinkingLevelUnspecified,
+    ///Little to no thinking.
+    Minimal,
+    Low,
+    Medium,
+    High,
+}
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum ThinkingControl {
+    /// Recommended for Gemini 3+.
+    ThinkingLevel(ThinkingLevel),
+    /// Indicates the thinking budget in tokens.
+    ThinkingBudget(i32),
+}
+impl From<ThinkingLevel> for ThinkingControl {
+    fn from(value: ThinkingLevel) -> Self {
+        Self::ThinkingLevel(value)
+    }
+}
+impl From<i32> for ThinkingControl {
+    fn from(value: i32) -> Self {
+        Self::ThinkingBudget(value.max(-1))
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Getters, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct ThinkingConfig {
-    /// Indicates whether to include thoughts in the response. If true, thoughts
-    /// are returned only if the model supports thought and thoughts are available.
+    /// If true, thoughts are returned only if the model supports thought and thoughts are available.
     #[get = "pub"]
     include_thoughts: bool,
-    /// Indicates the thinking budget in tokens.
-    #[get = "pub"]
-    thinking_budget: i32,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    control: Option<ThinkingControl>,
 }
 impl ThinkingConfig {
+    pub fn control(&self) -> Option<&ThinkingControl> {
+        self.control.as_ref()
+    }
     /// Read [here](https://ai.google.dev/gemini-api/docs/thinking#set-budget) for allowed range of
     /// `thinking_budget`
-    pub fn new(include_thoughts: bool, thinking_budget: u32) -> Self {
+    pub fn new(include_thoughts: bool, control: impl Into<ThinkingControl>) -> Self {
         Self {
             include_thoughts,
-            thinking_budget: thinking_budget as i32,
+            control: Some(control.into()),
         }
     }
     pub fn new_disable_thinking() -> Self {
-        Self {
-            include_thoughts: false,
-            thinking_budget: 0,
-        }
+        Self::new(false, 0)
     }
     pub fn new_dynamic_thinking(include_thoughts: bool) -> Self {
+        Self::new(include_thoughts, -1)
+    }
+}
+impl Default for ThinkingConfig {
+    ///Thoughts are included but thinking budget depends on model default.
+    fn default() -> Self {
         Self {
-            include_thoughts,
-            thinking_budget: -1,
+            include_thoughts: true,
+            control: None,
         }
     }
 }
 
-#[derive(Serialize, Deserialize, new, Debug, Clone)]
+#[derive(Serialize, Deserialize, Getters, new, Debug, Clone)]
 pub struct SystemInstruction {
+    #[get = "pub"]
     parts: Vec<Part>,
 }
-impl SystemInstruction {
-    pub fn from_str(prompt: impl Into<TextPart>) -> Self {
+impl From<String> for SystemInstruction {
+    fn from(prompt: String) -> Self {
         Self {
-            parts: vec![Part::text(prompt.into())],
+            parts: vec![prompt.into()],
+        }
+    }
+}
+impl<'a> From<&'a str> for SystemInstruction {
+    fn from(prompt: &'a str) -> Self {
+        Self {
+            parts: vec![prompt.into()],
         }
     }
 }
@@ -339,69 +453,88 @@ pub struct SafetySetting {
     threshold: BlockThreshold,
 }
 
-#[allow(non_snake_case)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolConfig {
+    /// Configuration for function calling.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function_calling_config: Option<FunctionCallingConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FunctionCallingConfig {
+    /// The mode in which function calling should execute.
+    /// Can be "AUTO", "ANY", or "NONE".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<FunctionCallingMode>,
+
+    /// Optional: Only provide this if mode is "ANY".
+    /// Restricts the model to only call specific functions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_function_names: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FunctionCallingMode {
+    /// Default model behavior. Model decides whether to predict a
+    /// function call or a natural language response.
+    Auto,
+    /// Model is constrained to always predict a function call.
+    Any,
+    /// Model will not predict any function call.
+    None,
+}
+
 #[derive(Serialize, new)]
+#[serde(rename_all = "camelCase")]
 pub struct GeminiRequestBody<'a> {
     system_instruction: Option<&'a SystemInstruction>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<&'a [Tool]>,
     contents: &'a [&'a Chat],
     #[serde(skip_serializing_if = "Option::is_none")]
-    generationConfig: Option<&'a Value>,
+    generation_config: Option<&'a Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    safetySettings: Option<&'a [SafetySetting]>,
+    safety_settings: Option<&'a [SafetySetting]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_config: Option<&'a ToolConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cached_content: Option<String>,
 }
 
-#[derive(Serialize, Debug, Clone)]
-#[allow(non_camel_case_types)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub enum Tool {
-    /// Generally it can be `Tool::google_search(json!({}))`
-    google_search(Value),
-    /// It is of form `Tool::function_calling(`[functionDeclaration](https://ai.google.dev/gemini-api/docs/function-calling?example=meeting)`)`
-    functionDeclarations(Vec<Value>),
-    /// Generally it can be `Tool::code_execution(json!({}))`,
-    code_execution(Value),
+    /// Generally it can be `Tool::GoogleSearch(json!({}))`
+    GoogleSearch(Value),
+    /// Recommended: write `#[gemini_function]` above the function and pass
+    /// `vec![function_name::gemini_schema(), ..]`
+    /// OR
+    /// It must be of form `vec![`[functionDeclaration](https://ai.google.dev/gemini-api/docs/function-calling?example=meeting)`, ..]`
+    FunctionDeclarations(Vec<Value>),
+    /// Generally it can be `Tool::CodeExecution(json!({}))`
+    /// AI will execute code to respond
+    CodeExecution(Value),
+    /// Generally it can be `Tool::UrlContext(json!({}))`
+    /// Uses URL provided in prompt for context
+    UrlContext(Value),
 }
 
 pub fn concatenate_parts(updating: &mut Vec<Part>, updator: &[Part]) {
     for updator_part in updator {
-        match updator_part {
-            Part::text(updator_text_part) => {
-                if let Some(Part::text(updating_text_part)) = updating.last_mut() {
-                    if *updating_text_part.thought() == *updator_text_part.thought() {
-                        updating_text_part.text.push_str(updator_text_part.text());
-                        continue;
-                    }
-                    continue;
-                }
-            }
-            Part::inline_data(updator_data) => {
-                if let Some(Part::inline_data(updating_data)) = updating.last_mut() {
-                    updating_data.data.push_str(&updator_data.data());
-                    continue;
-                }
-            }
-            Part::executable_code(updator_data) => {
-                if let Some(Part::executable_code(updating_data)) = updating.last_mut() {
-                    updating_data.code.push_str(&updator_data.code());
-                    continue;
-                }
-            }
-            Part::code_execution_result(updator_data) => {
-                if let Some(Part::code_execution_result(updating_data)) = updating.last_mut() {
-                    if let Some(ref mut updating_output) = updating_data.output {
-                        if let Some(updator_output) = updator_data.output() {
-                            updating_output.push_str(updator_output);
+        if let Some(updating_last) = updating.last_mut() {
+            match &updator_part.data {
+                PartType::Text(updator_text) => {
+                    if updating_last.is_thought() == updator_part.is_thought() {
+                        if let PartType::Text(ref mut updating_text) = updating_last.data {
+                            updating_text.push_str(&updator_text);
+                            continue;
                         }
-                    } else {
-                        updating_data.output = updator_data.output.clone();
                     }
-                    continue;
                 }
-            }
-            _ => {
-                updating.push(updator_part.clone());
-                continue;
+                _ => {}
             }
         }
         updating.push(updator_part.clone());

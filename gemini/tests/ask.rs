@@ -12,11 +12,11 @@ async fn see_web_markdown() {
         "gemini-2.5-flash",
         None,
     )
-    .ask(session.ask(parts))
+    .ask(session.ask_parts(parts))
     .await
     .unwrap();
 
-    println!("{}", response.get_text(""));
+    println!("{}", response.get_chat().get_text_no_think(""));
 }
 
 #[tokio::test]
@@ -28,14 +28,19 @@ async fn see_fs_markdown() {
     .await
     .process();
     let mut session = Session::new(6);
-    let response = Gemini::new(
+    let mut ai = Gemini::new(
         std::env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY not found"),
         "gemini-2.5-flash",
         None,
-    )
-    .ask(session.ask(parts))
-    .await
-    .unwrap();
+    );
+    ai.set_generation_config()["seed"] = 1.into();
+    let response = ai
+        .ask(session.ask_parts(parts))
+        .await
+        .unwrap()
+        .get_chat()
+        .get_text_no_think("\n");
 
-    println!("{}", response.get_text(""));
+    assert!(response.contains("scatter plot"));
+    println!("{}", response);
 }
